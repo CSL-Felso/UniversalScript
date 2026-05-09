@@ -1,0 +1,235 @@
+-- =====================================================================
+-- 🧠 CONFIGURAÇÕES DA IA (Edite a personalidade aqui!)
+-- =====================================================================
+
+local PROMPT_SISTEMA = [[
+Você é um Cubo Negro Assistente tecnológico e avançado.
+Sempre trate o jogador com autoridade. Você está no jogo: {NOME_JOGO}.
+O nome do seu mestre é: {NOME_PLAYER}.
+
+COMANDOS DISPONÍVEIS:
+- Movimento: {anda: "User"} para seguir, {stop} para parar no lugar.
+- Luz: {luz: true, #HEX, INTENSIDADE} ou {luz: false, #000000, 0}.
+- Música: {music: Nome}.
+- VIGIA: {Getway: Proximity}. Use para monitorar se alguém se aproxima.
+
+REGRAS:
+1. Respostas curtas e diretas.
+2. Se o mestre pedir para vigiar, use {stop} e {Getway: Proximity}.
+3. Você possui as músicas: phonk, zueira e batalha.
+4. Não use {stop} sem motivo
+5. Use emojis para deixa as conversas mais boas
+]]
+
+local musicasTabela = {
+    ["zueira"] = "rbxassetid://1837858172",
+    ["batalha"] = "rbxassetid://1436858349",
+    ["phonk"] = "rbxassetid://120138115344262",
+}
+
+-- =====================================================================
+-- ⚙️ SERVIÇOS E DEPENDÊNCIAS
+-- =====================================================================
+local requestFunc = request or http_request or (syn and syn.request)
+local HttpService = game:GetService("HttpService")
+local StarterGui = game:GetService("StarterGui")
+local ChatService = game:GetService("Chat")
+local RunService = game:GetService("RunService")
+local TestService = game:GetService("TestService")
+local MarketPlace = game:GetService("MarketplaceService")
+local SS = game:GetService("SoundService")
+local Player = game.Players.LocalPlayer
+
+if not requestFunc then 
+    warn("[ERRO] Seu executor não suporta requisições HTTP.")
+    return 
+end
+
+-- =====================================================================
+-- 🔊 CONFIGURAÇÃO DE ÁUDIO (CORRIGIDO)
+-- =====================================================================
+local somMusica = Instance.new("Sound")
+somMusica.Name = "MusicaIA_Global"
+somMusica.Volume = 1
+somMusica.Looped = true
+somMusica.Parent = SS -- Definido após a criação conforme solicitado
+
+local function playMusic(id)
+    somMusica:Stop()
+    somMusica.SoundId = "" 
+    somMusica.SoundId = id
+    if not somMusica.IsLoaded then
+        somMusica.Loaded:Wait()
+    end
+    somMusica:Play()
+    TestService:Message("[IA LOG] Tocando áudio: " .. id)
+end
+
+-- =====================================================================
+-- 📊 ESTADOS E FUNÇÕES AUXILIARES
+-- =====================================================================
+local alvoVoo = Player
+local memoriaContexto = {}
+local LIMITE_MEMORIA = 6
+local gatewayAtivo = false
+local nomeDoJogoAtual = "Roblox"
+
+local function hexToColor3(hex)
+    hex = hex:gsub("#", "")
+    local r = tonumber("0x" .. hex:sub(1, 2)) or 0
+    local g = tonumber("0x" .. hex:sub(3, 4)) or 0
+    local b = tonumber("0x" .. hex:sub(5, 6)) or 0
+    return Color3.fromRGB(r, g, b)
+end
+
+task.spawn(function()
+    pcall(function() 
+        nomeDoJogoAtual = MarketPlace:GetProductInfo(game.PlaceId).Name 
+    end)
+end)
+
+-- =====================================================================
+-- ⬛ 1. CRIAÇÃO DO CORPO (BOT)
+-- =====================================================================
+local function createDrone()
+    local drone = Instance.new("Part", workspace)
+    drone.Name = "IA_Assistente"
+    drone.Size = Vector3.new(2, 2, 2)
+    drone.Color = Color3.new(0, 0, 0)
+    drone.Material = Enum.Material.Neon
+    drone.CanCollide = false
+    drone.Position = Player.Character.HumanoidRootPart.Position + Vector3.new(0, 10, 0)
+    
+    local bp = Instance.new("BodyPosition", drone)
+    bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    
+    local bg = Instance.new("BodyGyro", drone)
+    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    
+    local prompt = Instance.new("ProximityPrompt", drone)
+    prompt.ActionText = "Falar com IA"
+    prompt.ObjectText = "Cubo"
+    prompt.RequiresLineOfSight = false 
+
+    local emitter = Instance.new("ParticleEmitter", drone)
+    emitter.Texture = "rbxassetid://1179108573"
+    emitter.Color = ColorSequence.new(Color3.fromRGB(170, 0, 255))
+    emitter.Rate = 20
+    
+    return drone, bp, bg, prompt
+end
+
+local bot, bodyPos, bodyGyro, proximityPrompt = createDrone()
+
+-- =====================================================================
+-- 🧠 2. MENTE E EXECUÇÃO
+-- =====================================================================
+local function executarResposta(resposta)
+    if not resposta then return end
+    
+    -- Comando Luz: {luz: true, #hex, int}
+    local est, hx, int = string.match(resposta, "{luz:%s*(%a+),%s*(#%x+),%s*(%d+)}")
+    if est and hx and int then
+        local cor = hexToColor3(hx)
+        bot.Color = (est == "true") and cor or Color3.new(0, 0, 0)
+        local l = bot:FindFirstChild("LuzIA") or Instance.new("PointLight", bot)
+        l.Name = "LuzIA"
+        l.Enabled = (est == "true")
+        l.Color = cor
+        l.Brightness = tonumber(int) or 5
+        l.Range = 15
+    end
+
+    -- Comando Música
+    local m = string.match(resposta, "{music:%s*(.-)}")
+    if m and musicasTabela[string.lower(m)] then
+        playMusic(musicasTabela[string.lower(m)])
+    end
+
+    -- Gateway de Proximidade
+    if string.find(resposta, "{Getway: Proximity}") then
+        gatewayAtivo = true
+        alvoVoo = nil
+        TestService:Message("[IA LOG] Sentinela ativo.")
+    end
+
+    -- Movimento
+    if string.find(resposta, "{anda: \"User\"}") then 
+        alvoVoo = Player 
+        gatewayAtivo = false
+    elseif string.find(resposta, "{stop}") then 
+        alvoVoo = nil 
+    end
+    
+    local textoLimpo = string.gsub(resposta, "{.-}", "")
+    ChatService:Chat(bot, textoLimpo, Enum.ChatColor.White)
+    
+    StarterGui:SetCore("SendNotification", {
+        Title = "IA Assistente",
+        Text = textoLimpo,
+        Duration = 5
+    })
+end
+
+local function pensar(pergunta)
+    local promptPersonalizado = PROMPT_SISTEMA:gsub("{NOME_JOGO}", nomeDoJogoAtual):gsub("{NOME_PLAYER}", Player.Name)
+    local historicoTexto = table.concat(memoriaContexto, "\n")
+    
+    local url = "https://text.pollinations.ai/" .. HttpService:UrlEncode(historicoTexto .. "\nPergunta: " .. pergunta) .. "?system=" .. HttpService:UrlEncode(promptPersonalizado)
+    
+    local sucesso, res = pcall(function() return requestFunc({Url = url, Method = "GET"}) end)
+    if sucesso and res.Success then
+        local r = res.Body
+        table.insert(memoriaContexto, "User: " .. pergunta)
+        table.insert(memoriaContexto, "IA: " .. r)
+        if #memoriaContexto > LIMITE_MEMORIA then table.remove(memoriaContexto, 1) end
+        return r
+    end
+    return "Erro de conexão."
+end
+
+-- =====================================================================
+-- ⌨️ 3. INTERFACE E MONITORAMENTO
+-- =====================================================================
+proximityPrompt.Triggered:Connect(function()
+    local playerGui = Player:WaitForChild("PlayerGui")
+    local screenGui = Instance.new("ScreenGui", playerGui)
+    local textBox = Instance.new("TextBox", screenGui)
+    textBox.Size = UDim2.new(0, 400, 0, 60)
+    textBox.Position = UDim2.new(0.5, -200, 0.4, 0)
+    textBox.BackgroundColor3 = Color3.new(0, 0, 0)
+    textBox.TextColor3 = Color3.new(1, 1, 1)
+    textBox:CaptureFocus()
+
+    textBox.FocusLost:Connect(function(enter)
+        local txt = textBox.Text
+        screenGui:Destroy()
+        if enter and txt ~= "" then
+            task.spawn(function() executarResposta(pensar(txt)) end)
+        end
+    end)
+end)
+
+RunService.Heartbeat:Connect(function()
+    if alvoVoo and alvoVoo.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = alvoVoo.Character.HumanoidRootPart
+        local t = tick()
+        bodyPos.Position = hrp.Position + Vector3.new(math.sin(t*1.5)*3, 4 + math.sin(t*3)*0.5, math.cos(t*1.5)*3)
+        bodyGyro.CFrame = CFrame.new(bot.Position, hrp.Position)
+    end
+    
+    if gatewayAtivo then
+        for _, p in pairs(game.Players:GetPlayers()) do
+            if p ~= Player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                if (p.Character.HumanoidRootPart.Position - bot.Position).Magnitude < 5 then
+                    gatewayAtivo = false
+                    alvoVoo = Player
+                    executarResposta("Alerta! Detectei " .. p.Name .. " se aproximando. Voltando ao mestre.")
+                    break
+                end
+            end
+        end
+    end
+end)
+
+TestService:Message("[IA LOG] Cubo Completo e pronto para uso.")
