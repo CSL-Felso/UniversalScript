@@ -14,12 +14,15 @@ local log = game:GetService("TestService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- Controle de Zoom e Altura
+-- ==========================================
+-- CONFIGURAÇÕES DA CÂMERA
+-- ==========================================
 local zoom = 8
 local camHeight = 3
 local minZoom = 4
 local maxZoom = 15
 local zoomSpeed = 1.5
+local cameraSpeed = 0.35 
 
 local enabled = false
 local target = nil
@@ -27,6 +30,7 @@ local renderConnection = nil
 local inputConnection = nil
 local diamond = nil
 local lastSwitchTime = 0
+local lastSearchTime = 0
 
 local function adjustCamera(amount)
 	local oldZoom = zoom
@@ -45,10 +49,11 @@ gui.Parent = player:WaitForChild("PlayerGui")
 gui.ResetOnSpawn = false
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.fromOffset(140, 44)
-mainFrame.Position = UDim2.new(1, -160, 0, 190)
+-- Aumentado para 175px de largura para acomodar o atalho [T]
+mainFrame.Size = UDim2.fromOffset(175, 44)
+mainFrame.Position = UDim2.new(1, -195, 0, 190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-mainFrame.Active = true -- Necessário para interações
+mainFrame.Active = true
 mainFrame.Parent = gui
 
 local frameCorner = Instance.new("UICorner")
@@ -61,9 +66,21 @@ stroke.Thickness = 1.5
 stroke.Transparency = 0.6
 stroke.Parent = mainFrame
 
+-- Indicador de tecla [T]: para jogadores de PC
+local keyHintLabel = Instance.new("TextLabel")
+keyHintLabel.Size = UDim2.fromOffset(35, 34)
+keyHintLabel.Position = UDim2.new(0, 8, 0.5, 0)
+keyHintLabel.AnchorPoint = Vector2.new(0, 0.5)
+keyHintLabel.BackgroundTransparency = 1
+keyHintLabel.Text = "[T]:"
+keyHintLabel.TextColor3 = Color3.fromRGB(170, 240, 240)
+keyHintLabel.Font = Enum.Font.GothamMedium
+keyHintLabel.TextSize = 14
+keyHintLabel.Parent = mainFrame
+
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.fromOffset(66, 34)
-toggleBtn.Position = UDim2.new(0, 5, 0.5, 0)
+toggleBtn.Position = UDim2.new(0, 43, 0.5, 0) -- Movido para a direita para dar espaço ao indicador
 toggleBtn.AnchorPoint = Vector2.new(0, 0.5)
 toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 toggleBtn.Text = "Toggle"
@@ -78,7 +95,7 @@ toggleCorner.Parent = toggleBtn
 
 local plusBtn = Instance.new("TextButton")
 plusBtn.Size = UDim2.fromOffset(30, 34)
-plusBtn.Position = UDim2.new(0, 75, 0.5, 0)
+plusBtn.Position = UDim2.new(0, 113, 0.5, 0) -- Ajustado dinamicamente
 plusBtn.AnchorPoint = Vector2.new(0, 0.5)
 plusBtn.BackgroundTransparency = 1
 plusBtn.Text = "+"
@@ -89,7 +106,7 @@ plusBtn.Parent = mainFrame
 
 local minusBtn = Instance.new("TextButton")
 minusBtn.Size = UDim2.fromOffset(30, 34)
-minusBtn.Position = UDim2.new(0, 105, 0.5, 0)
+minusBtn.Position = UDim2.new(0, 141, 0.5, 0) -- Ajustado dinamicamente
 minusBtn.AnchorPoint = Vector2.new(0, 0.5)
 minusBtn.BackgroundTransparency = 1
 minusBtn.Text = "–"
@@ -138,27 +155,28 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 -- ==========================================
--- LÓGICA DO SCRIPT (LOCK-ON E LERP)
+-- LÓGICA DE SELEÇÃO POR PROXIMIDADE 3D
 -- ==========================================
 local function getClosest()
+	local myChar = player.Character
+	if not myChar then return nil end
+	local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+	if not myHRP then return nil end
+
 	local closest = nil
 	local shortest = math.huge
-	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
 
 	for _, obj in pairs(workspace:GetDescendants()) do
-		if obj:IsA("Model") and obj ~= player.Character then
+		if obj:IsA("Model") and obj ~= myChar then
 			local hum = obj:FindFirstChild("Humanoid")
 			local hrp = obj:FindFirstChild("HumanoidRootPart")
 
 			if hum and hrp and hum.Health > 0 then
-				local pos, onScreen = camera:WorldToViewportPoint(hrp.Position)
+				local dist = (hrp.Position - myHRP.Position).Magnitude
 
-				if onScreen then
-					local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
-					if dist < shortest then
-						shortest = dist
-						closest = obj
-					end
+				if dist < shortest then
+					shortest = dist
+					closest = obj
 				end
 			end
 		end
@@ -173,7 +191,7 @@ local function createDiamond(hrp)
 	bb.Size = UDim2.new(0, 50, 0, 50)
 	bb.Adornee = hrp
 	bb.AlwaysOnTop = true
-	bb.Parent = player.PlayerGui
+	bb.Parent = player:WaitForChild("PlayerGui")
 
 	local img = Instance.new("ImageLabel")
 	img.Size = UDim2.fromScale(1, 1)
@@ -186,14 +204,8 @@ local function createDiamond(hrp)
 end
 
 local function cleanupConnections()
-	if renderConnection then
-		renderConnection:Disconnect()
-		renderConnection = nil
-	end
-	if inputConnection then
-		inputConnection:Disconnect()
-		inputConnection = nil
-	end
+	if renderConnection then renderConnection:Disconnect(); renderConnection = nil end
+	if inputConnection then inputConnection:Disconnect(); inputConnection = nil end
 end
 
 local function disable()
@@ -218,7 +230,7 @@ local function disable()
 end
 
 local function switchTarget(deltaInput)
-	if tick() - lastSwitchTime < 0.3 then return end
+	if os.clock() - lastSwitchTime < 0.3 then return end
 	if not target then return end
 
 	local currentHrp = target:FindFirstChild("HumanoidRootPart")
@@ -258,7 +270,7 @@ local function switchTarget(deltaInput)
 	if closest then
 		target = closest
 		createDiamond(closest:FindFirstChild("HumanoidRootPart"))
-		lastSwitchTime = tick()
+		lastSwitchTime = os.clock()
 	end
 end
 
@@ -277,81 +289,67 @@ local function onInputChanged(input, gameProcessed)
 end
 
 local function enable()
+	cleanupConnections()
+	
+	camera.CameraType = Enum.CameraType.Scriptable
 	inputConnection = UserInputService.InputChanged:Connect(onInputChanged)
 
 	renderConnection = RunService.RenderStepped:Connect(function()
 		if not enabled then return end
 
 		if not target then
-			target = getClosest()
-			if target then
-				local hrp = target:FindFirstChild("HumanoidRootPart")
-				if hrp then createDiamond(hrp) end
-			else
+			if os.clock() - lastSearchTime > 0.2 then
+				lastSearchTime = os.clock()
+				target = getClosest()
+				if target then
+					local hrp = target:FindFirstChild("HumanoidRootPart")
+					if hrp then createDiamond(hrp) end
+				end
+			end
+			
+			if not target then
+				camera.CameraType = Enum.CameraType.Custom
 				return
 			end
 		end
 
 		local myChar = player.Character
-		if not myChar then
-			disable()
-			return
-		end
+		if not myChar then disable(); return end
 
 		local myHRP = myChar:FindFirstChild("HumanoidRootPart")
 		local myHum = myChar:FindFirstChildOfClass("Humanoid")
 		
-		if not myHRP or not myHum or myHum.Health <= 0 then
-			disable()
-			return
-		end
+		if not myHRP or not myHum or myHum.Health <= 0 then disable(); return end
 
 		local hrp = target:FindFirstChild("HumanoidRootPart")
 		local hum = target:FindFirstChild("Humanoid")
 
-		if not hrp or not hum or hum.Health <= 0 then
-			disable() 
-			return
+		if not hrp or not hum or hum.Health <= 0 then 
+			target = nil 
+			if diamond then diamond:Destroy(); diamond = nil end
+			return 
 		end
 
-		local myPos = myHRP.Position
-		local targetPos = hrp.Position
-		local look = Vector3.new(targetPos.X, myPos.Y, targetPos.Z)
-
-		if myHum then myHum.AutoRotate = false end
-
-		-- APLICAÇÃO DO LERP NO PERSONAGEM (Para virar suavemente)
-		local targetCharCF = CFrame.new(myPos, look)
-		myHRP.CFrame = myHRP.CFrame:Lerp(targetCharCF, 0.9)
-
 		camera.CameraType = Enum.CameraType.Scriptable
+		if myHum then myHum.AutoRotate = true end 
 
-		-- Posição desejada para a câmera (com base no zoom e altura ajustáveis)
 		local dir = (hrp.Position - myHRP.Position)
 		local dirUnit = dir.Unit
 		local camPos = myHRP.Position - dirUnit * zoom + Vector3.new(0, camHeight, 0)
 		
 		local targetCamCF = CFrame.new(camPos, hrp.Position)
-
-		-- APLICAÇÃO DO LERP NA CÂMERA (Suavidade de 0.9)
-		camera.CFrame = camera.CFrame:Lerp(targetCamCF, 0.9)
+		camera.CFrame = camera.CFrame:Lerp(targetCamCF, cameraSpeed)
 	end)
 end
 
 -- ==========================================
 -- BOTÕES E TECLADO
 -- ==========================================
-plusBtn.MouseButton1Click:Connect(function()
-	adjustCamera(1)
-end)
-
-minusBtn.MouseButton1Click:Connect(function()
-	adjustCamera(-1)
-end)
+plusBtn.MouseButton1Click:Connect(function() adjustCamera(1) end)
+minusBtn.MouseButton1Click:Connect(function() adjustCamera(-1) end)
 
 toggleBtn.MouseButton1Click:Connect(function()
 	enabled = not enabled
-
 	if enabled then
 		toggleBtn.Text = "ON"
 		toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 255, 200)
@@ -368,7 +366,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     
 	if input.KeyCode == Enum.KeyCode.T then
 		enabled = not enabled 
-        
 		if enabled then
 			toggleBtn.Text = "ON"
 			toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 255, 200)
